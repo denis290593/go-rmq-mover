@@ -24,11 +24,9 @@ func main() {
 	// Чтение аргументов командной строки для названий очередей
 	failedQueue := flag.String("from", "", "The name of the 'from' queue")
 	destinationQueue := flag.String("to", "", "The name of the 'to' queue")
-	countMessage := flag.Int("count", 0, "Number of messages to move (0 for all messages)")
-
 	flag.Parse()
 
-	if *failedQueue == "" {
+	if *failedQueue == "" || *destinationQueue == "" {
 		log.Fatalf("Both 'from' and 'to' queue names must be provided")
 	}
 
@@ -47,15 +45,14 @@ func main() {
 	defer ch.Close()
 
 	// Обработка сообщений
-	processMessages(ch, *failedQueue, *destinationQueue, *countMessage)
+	processMessages(ch, *failedQueue, *destinationQueue)
 }
 
-func processMessages(ch *amqp.Channel, fromQueueName, toQueueName string, countMessage int) {
-	messagesMoved := 0
-	for countMessage == 0 || messagesMoved < countMessage {
+func processMessages(ch *amqp.Channel, fromQueueName, toQueueName string) {
+	for {
 		msg, ok, err := ch.Get(
 			fromQueueName, // очередь
-			false,         // auto-ack
+			true,          // auto-ack
 		)
 		if err != nil {
 			log.Fatalf("Failed to get a message: %s", err)
@@ -65,36 +62,19 @@ func processMessages(ch *amqp.Channel, fromQueueName, toQueueName string, countM
 			log.Println("No more messages in queue, exiting...")
 			break
 		}
-
-		destinationQueue := toQueueName
-		if destinationQueue == "" {
-			if enqueueTopic, ok := msg.Headers["enqueue.topic"].(string); ok {
-				destinationQueue = enqueueTopic
-			} else {
-				log.Printf("No 'to' queue specified and no 'enqueue.topic' header found, skipping message")
-				msg.Nack(false, true) // Отклоняем сообщение и возвращаем его в очередь
-				continue
-			}
-		}
-
 		err = ch.Publish(
-			"",               // exchange
-			destinationQueue, // routing key
-			false,            // mandatory
-			false,            // immediate
+			"",          // exchange
+			toQueueName, // routing key
+			false,       // mandatory
+			false,       // immediate
 			amqp.Publishing{
 				ContentType: msg.ContentType,
 				Body:        msg.Body,
-				Headers:     msg.Headers,
 			})
 		if err != nil {
 			log.Printf("Failed to publish a message: %s", err)
-			msg.Nack(false, true) // Отклоняем сообщение и возвращаем его в очередь
 		} else {
-			log.Printf("Moved message to queue %s: %s", destinationQueue, msg.Body)
-			msg.Ack(false) // Подтверждаем обработку сообщения
-			messagesMoved++
+			log.Printf("Moved message: %s", msg.Body)
 		}
 	}
-	log.Printf("Total messages moved: %d", messagesMoved)
 }
